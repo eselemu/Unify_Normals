@@ -3,7 +3,6 @@ from mesh_processing import MeshProcessor
 def main():
     # Initialize mesh processor
     processor = MeshProcessor()
-    
     # Read input file
     input_file = './Input/s01.obj'
     processor.read_obj_file(input_file)
@@ -18,6 +17,19 @@ def main():
     processor.color_faces_by_orientation()
     
     # Visualize with colored faces and normals
+    processor.visualize_mesh_with_normals(show_normals=True)
+
+    # Unify normals
+    processor.unify_normals()
+
+    # Color faces by orientation
+    processor.color_faces_by_orientation()
+    
+    # Visualize with colored faces and normals
+    processor.visualize_mesh_with_normals(show_normals=True)
+
+    processor.correct_normals()
+
     processor.visualize_mesh_with_normals(show_normals=True)
     
     # Write output with colors (OBJ + MTL)

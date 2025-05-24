@@ -18,11 +18,13 @@ class MeshProcessor:
             self.y = y
             self.z = z
             self.halfEdge = None
+            self.normal = None
 
     class Face:
         def __init__(self):
             self.halfEdge = None
             self.color = (0.5, 0.5, 0.5, 0.5)
+            self.vertices = []
             self.normal = None
 
     class HalfEdge:
@@ -52,6 +54,71 @@ class MeshProcessor:
                 normal = normal / norm  # Normalize
             face.normal = normal
 
+    def calculate_vertex_normals(self):
+        """Calculate vertex normals by averaging adjacent face normals"""
+        # Reset all vertex normals
+        for vertex in self.verticesArray.values():
+            vertex.normal = np.zeros(3)
+        
+        # Sum all face normals for each vertex
+        for face in self.facesArray.values():
+            if face.normal is None:
+                continue
+                
+            for vertex in face.vertices:  # Use stored vertices
+                vertex.normal += face.normal
+        
+        # Normalize the vertex normals
+        for vertex in self.verticesArray.values():
+            norm = np.linalg.norm(vertex.normal)
+            if norm > 0:
+                vertex.normal /= norm
+        
+        return {v_idx: vertex.normal for v_idx, vertex in self.verticesArray.items()}
+
+    def get_highest_vertex(self):
+        """Find the vertex with the maximum Y-coordinate"""
+        highest_vertex = None
+        max_y = -float('inf')
+        
+        for v_idx, vertex in self.verticesArray.items():
+            if vertex.y > max_y:
+                max_y = vertex.y
+                highest_vertex = vertex
+        
+        return highest_vertex
+
+    def is_mesh_outwards(self, distance=0.1):
+        # Get the highest vertex
+        highest_vertex = self.get_highest_vertex()
+        if not highest_vertex or highest_vertex.normal is None:
+            return True  # No vertex or normal, assume correct
+        
+        # Calculate test point by moving along vertex normal
+        test_point = np.array([
+            highest_vertex.x + highest_vertex.normal[0] * distance,
+            highest_vertex.y + highest_vertex.normal[1] * distance,
+            highest_vertex.z + highest_vertex.normal[2] * distance
+        ])
+        
+        # Compare Y components
+        return test_point[1] > highest_vertex.y
+
+    def correct_normals(self, outwards = True):
+        # Check if normals need flipping
+        is_outwards = self.is_mesh_outwards()
+        if outwards and (not is_outwards):
+            print("Flipping all normals to ensure outward orientation")
+            self.flip_all_normals()
+        elif (not outwards) and is_outwards:
+            print("Flipping all normals to ensure inward orientation")
+            self.flip_all_normals()
+    
+    def flip_all_normals(self):
+        """Flip all face normals and adjust half-edge structures"""
+        for face in self.facesArray.values():
+            self.flip_face_normal(face)
+
     def color_faces_by_orientation(self, reference_normal=None):
         """Color faces based on their normal orientation"""
         if reference_normal is None:
@@ -59,14 +126,14 @@ class MeshProcessor:
             first_face = next(iter(self.facesArray.values()))
             reference_normal = first_face.normal
         
-        green = False
+        green = True
         for face in self.facesArray.values():
             if face.normal is None:
                 continue
                 
             dot_product = np.dot(face.normal, reference_normal)
             if dot_product < 0:
-                green = ~green
+                green = not green
             if green:
                 # Facing same direction as reference (green)
                 face.color = (0, 1, 0, 0.5)  # RGBA
@@ -75,55 +142,46 @@ class MeshProcessor:
                 face.color = (1, 0, 0, 0.5)  # RGBA
             reference_normal = face.normal
 
-    def color_faces_by_propagated_orientation(self):
-        """Color faces using consistent orientation propagation"""
-        # Reset all colors to undetermined
-        for face in self.facesArray.values():
-            face.color = (0.5, 0.5, 0.5, 0.5)
-        
-        # Use a queue for BFS traversal
-        from collections import deque
-        queue = deque()
-        
-        # Start with first face as reference
-        first_face = next(iter(self.facesArray.values()))
-        queue.append(first_face)
-        first_face.color = (0, 1, 0, 0.5)  # Green = correct
-        
-        visited = set()
-        
-        while queue:
-            current_face = queue.popleft()
-            if current_face in visited:
-                continue
-                
-            visited.add(current_face)
+    def flip_face_normal(self, face):
+        """Flip the normal of a face and adjust its half-edge structure"""
+        if face.normal is not None:
+            # Flip the normal vector
+            face.normal = -face.normal
             
-            # Get all adjacent faces through half-edges
-            start_he = current_face.halfEdge
+            # Get all half-edges of the face
+            start_he = face.halfEdge
+            half_edges = []
             he = start_he
             while True:
-                # Get twin edge's face (adjacent face)
-                twin = he.twin
-                if twin is not None:
-                    adjacent_face = twin.face
-                    
-                    if adjacent_face not in visited:
-                        # Check orientation consistency
-                        dot_product = np.dot(current_face.normal, adjacent_face.normal)
-                        
-                        if dot_product < 0:  # Normals point in opposite directions
-                            # Flip the adjacent face's normal
-                            adjacent_face.normal *= -1
-                            adjacent_face.color = (1, 0, 0, 0.5)  # Red = flipped
-                        else:
-                            adjacent_face.color = (0, 1, 0, 0.5)  # Green = consistent
-                            
-                        queue.append(adjacent_face)
-                
+                half_edges.append(he)
                 he = he.next
                 if he == start_he:
                     break
+            
+            # Reverse the order of half-edges
+            for i in range(len(half_edges)):
+                # Update next and prev pointers
+                half_edges[i].next = half_edges[(i - 1) % len(half_edges)]
+                half_edges[i].prev = half_edges[(i + 1) % len(half_edges)]
+            
+            # Update face's half-edge pointer (optional, could keep same)
+            face.halfEdge = half_edges[0]
+
+
+    def unify_normals(self, reference_normal=None):
+        """Color faces based on their normal orientation"""
+        if reference_normal is None:
+            # Use the first face's normal as reference if none provided
+            first_face = next(iter(self.facesArray.values()))
+            reference_normal = first_face.normal
+        for face in self.facesArray.values():
+            if face.normal is None:
+                continue
+                
+            dot_product = np.dot(face.normal, reference_normal)
+            if dot_product < 0:
+                self.flip_face_normal(face)
+            reference_normal = face.normal
 
     def read_obj_file(self, file_path):
         """Read vertices and faces from an OBJ file"""
@@ -160,10 +218,15 @@ class MeshProcessor:
 
         # Connect halfEdges to vertices
         for face_index, face_vertices in enumerate(self.faces): 
+            face = self.facesArray[face_index]
             for i, vertex_index in enumerate(face_vertices):
+                # Store vertex reference in face
+                vertex = self.verticesArray[vertex_index]
+                face.vertices.append(vertex)
+                # Connect half-edge
                 halfEdge = self.halfEdgesArray[face_index * 3 + i]
-                halfEdge.origin = self.verticesArray[vertex_index]
-                self.verticesArray[vertex_index].halfEdge = halfEdge
+                halfEdge.origin = vertex
+                vertex.halfEdge = halfEdge
 
         # Connect half edges to faces
         for face_index, face_vertices in enumerate(self.faces):
@@ -183,7 +246,6 @@ class MeshProcessor:
                 start_idx = face_vertices[i]
                 end_idx = face_vertices[(i + 1) % 3]
                 halfEdge = self.halfEdgesArray[face_index * 3 + i]
-
                 edge_map[(start_idx, end_idx)] = halfEdge
 
         for (start, end), halfEdge in edge_map.items():
@@ -299,9 +361,3 @@ class MeshProcessor:
         plt.title('Mesh with Face Orientation (Green=Correct, Red=Flipped)')
         plt.show()
 
-    def unify_normals(self):
-        """Unify normals to consistent orientation"""
-        # This is where you'll implement your normal unification algorithm
-        # For now it's a placeholder
-        print("Normal unification not yet implemented")
-        pass
