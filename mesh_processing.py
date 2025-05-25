@@ -107,6 +107,12 @@ class MeshProcessor:
     def correct_normals(self, outwards = True):
         # Check if normals need flipping
         is_outwards = self.is_mesh_outwards()
+
+        if is_outwards:
+            print("Mesh is outwards")
+        else:
+            print("Mesh is inwards")
+
         if outwards and (not is_outwards):
             print("Flipping all normals to ensure outward orientation")
             self.flip_all_normals()
@@ -116,6 +122,7 @@ class MeshProcessor:
     
     def flip_all_normals(self):
         """Flip all face normals and adjust half-edge structures"""
+        print("Flipping all normals")
         for face in self.facesArray.values():
             self.flip_face_normal(face)
 
