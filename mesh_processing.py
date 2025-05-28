@@ -11,6 +11,7 @@ class MeshProcessor:
         self.verticesArray = {}
         self.halfEdgesArray = []
         self.facesArray = {}
+        self.meshComponents = []
 
     class Vertex:
         def __init__(self, x, y, z):
@@ -26,7 +27,7 @@ class MeshProcessor:
             self.color = (0.5, 0.5, 0.5, 0.5)
             self.vertices = []
             self.normal = None
-
+    
     class HalfEdge:
         def __init__(self):
             self.origin = None
@@ -76,6 +77,44 @@ class MeshProcessor:
         
         return {v_idx: vertex.normal for v_idx, vertex in self.verticesArray.items()}
 
+    def get_connected_components(self):
+        """
+        Find connected components (submeshes) in the mesh.
+        Each component is a set of connected Face objects.
+        """
+        visited = set()
+        components = []
+    
+        for face in self.facesArray.values():
+            if face in visited:
+                continue
+    
+            # Start a new component
+            component = set()
+            stack = [face]
+    
+            while stack:
+                current = stack.pop()
+                if current in visited:
+                    continue
+                visited.add(current)
+                component.add(current)
+    
+                # Traverse all neighboring faces via half-edge twins
+                he = current.halfEdge
+                start = he
+                while True:
+                    twin = he.twin
+                    if twin and twin.face and twin.face not in visited:
+                        stack.append(twin.face)
+                    he = he.next
+                    if he == start:
+                        break
+            components.append(component)
+        self.meshComponents = components
+        return components
+
+
     def get_highest_vertex(self):
         """Find the vertex with the maximum Y-coordinate"""
         highest_vertex = None
@@ -119,7 +158,45 @@ class MeshProcessor:
         elif (not outwards) and is_outwards:
             print("Flipping all normals to ensure inward orientation")
             self.flip_all_normals()
-    
+
+    def correct_normals_for_component(self, component_faces, outwards=True):
+        """Check and flip normals for a single component if needed."""
+        # Recalculate vertex normals for this component
+        # First, find highest vertex in component
+        self.calculate_face_normals()
+        self.calculate_vertex_normals()
+        highest_vertex = None
+        max_y = -float('inf')
+        for face in component_faces:
+            for vertex in face.vertices:
+                if vertex.y > max_y:
+                    max_y = vertex.y
+                    highest_vertex = vertex
+        
+        if not highest_vertex or highest_vertex.normal is None:
+            return  # Can't correct if data is missing
+        
+        # Calculate test point
+        distance = 0.1
+        test_point = np.array([
+            highest_vertex.x + highest_vertex.normal[0] * distance,
+            highest_vertex.y + highest_vertex.normal[1] * distance,
+            highest_vertex.z + highest_vertex.normal[2] * distance
+        ])
+        
+        is_outwards = test_point[1] > highest_vertex.y
+        
+        if outwards and not is_outwards:
+            print("Flipping component to outward orientation")
+            for face in component_faces:
+                self.flip_face_normal(face)
+            #self.flip_all_normals()
+        elif not outwards and is_outwards:
+            print("Flipping component to inward orientation")
+            for face in component_faces:
+                self.flip_face_normal(face)
+            #self.flip_all_normals()
+        
     def flip_all_normals(self):
         """Flip all face normals and adjust half-edge structures"""
         print("Flipping all normals")
@@ -150,45 +227,94 @@ class MeshProcessor:
             reference_normal = face.normal
 
     def flip_face_normal(self, face):
-        """Flip the normal of a face and adjust its half-edge structure"""
+        """Flip the normal of a face and reverse its winding (half-edge order)"""
         if face.normal is not None:
             # Flip the normal vector
             face.normal = -face.normal
+    
+        # Collect half-edges in order
+        he_list = []
+        he = face.halfEdge
+        start = he
+        while True:
+            he_list.append(he)
+            he = he.next
+            if he == start:
+                break
+    
+        # Reverse the order of half-edges and update pointers
+        n = len(he_list)
+        for i in range(n):
+            he_list[i].next = he_list[i - 1]
+            he_list[i].prev = he_list[(i + 1) % n]
+    
+        # Update face.halfEdge to new "first" half-edge in reversed order
+        face.halfEdge = he_list[-1]
+
+
+    def unify_normals(self):
+        """Unify face normals by propagating consistent orientation using DFS traversal."""
+        visited = set()
+
+        print("UNIFYING NORMALS")
+        
+        def dfs(face, expected_normal):
+            visited.add(face)
+            # If dot product is negative, flip face
+            if np.dot(face.normal, expected_normal) < -0.25:
+                print(face.normal)
+                self.flip_face_normal(face)
+                print(face.normal)
+                print("----------------------------------------------------------------------------------------")
             
-            # Get all half-edges of the face
+            # Traverse neighbor faces
             start_he = face.halfEdge
-            half_edges = []
             he = start_he
             while True:
-                half_edges.append(he)
+                twin = he.twin
+                if twin and twin.face and twin.face not in visited:
+                    #print("Entering recursive dfs")
+                    dfs(twin.face, face.normal)
                 he = he.next
                 if he == start_he:
                     break
-            
-            # Reverse the order of half-edges
-            for i in range(len(half_edges)):
-                # Update next and prev pointers
-                half_edges[i].next = half_edges[(i - 1) % len(half_edges)]
-                half_edges[i].prev = half_edges[(i + 1) % len(half_edges)]
-            
-            # Update face's half-edge pointer (optional, could keep same)
-            face.halfEdge = half_edges[0]
 
-
-    def unify_normals(self, reference_normal=None):
-        """Color faces based on their normal orientation"""
-        if reference_normal is None:
-            # Use the first face's normal as reference if none provided
-            first_face = next(iter(self.facesArray.values()))
-            reference_normal = first_face.normal
+        # Start DFS from each unvisited face (handles disconnected components)
         for face in self.facesArray.values():
-            if face.normal is None:
-                continue
-                
-            dot_product = np.dot(face.normal, reference_normal)
-            if dot_product < 0:
+            if face not in visited:
+                dfs(face, face.normal)
+
+    def unify_normals_component(self, component_faces):
+        """Unify normals in a subset of faces (single connected component)."""
+        visited = set()
+    
+        def dfs(face, expected_normal):
+            visited.add(face)
+            if np.dot(face.normal, expected_normal) < -0.25:
                 self.flip_face_normal(face)
-            reference_normal = face.normal
+    
+            he = face.halfEdge
+            start = he
+            while True:
+                twin = he.twin
+                if twin and twin.face in component_faces and twin.face not in visited:
+                    dfs(twin.face, face.normal)
+                he = he.next
+                if he == start:
+                    break
+        for face in component_faces:
+            if face not in visited:
+                dfs(face, face.normal)
+
+
+    def unify_normals_all_components(self):
+        """Detect all components and unify normals per component."""
+        components = self.get_connected_components()
+        print(f"Found {len(components)} connected components")
+
+        for idx, component in enumerate(components):
+            print(f"Unifying normals in component {idx}")
+            self.unify_normals_component(component)
 
     def read_obj_file(self, file_path):
         """Read vertices and faces from an OBJ file"""
@@ -246,19 +372,22 @@ class MeshProcessor:
                 face_halfEdgesArray[i].prev = face_halfEdgesArray[(i + 2) % 3]
 
         # Connect twins
-        edge_map = {}  # key: (start_vertex_index, end_vertex_index), value: halfEdge
+        # Connect twins (handles flipped faces)
+        edge_map = {}
 
         for face_index, face_vertices in enumerate(self.faces):
             for i in range(3):
                 start_idx = face_vertices[i]
                 end_idx = face_vertices[(i + 1) % 3]
+                key = tuple(sorted((start_idx, end_idx)))  # unordered edge key
                 halfEdge = self.halfEdgesArray[face_index * 3 + i]
-                edge_map[(start_idx, end_idx)] = halfEdge
 
-        for (start, end), halfEdge in edge_map.items():
-            twin_key = (end, start)
-            if twin_key in edge_map:
-                halfEdge.twin = edge_map[twin_key]
+                if key in edge_map:
+                    twin = edge_map[key]
+                    halfEdge.twin = twin
+                    twin.twin = halfEdge
+                else:
+                    edge_map[key] = halfEdge
 
         return self.verticesArray, self.halfEdgesArray, self.facesArray
 
@@ -367,4 +496,3 @@ class MeshProcessor:
         ax.set_zlabel('Z')
         plt.title('Mesh with Face Orientation (Green=Correct, Red=Flipped)')
         plt.show()
-
