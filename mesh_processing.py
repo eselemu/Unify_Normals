@@ -316,6 +316,79 @@ class MeshProcessor:
             print(f"Unifying normals in component {idx}")
             self.unify_normals_component(component)
 
+
+    def ray_intersects_triangle(self, origin, direction, v0, v1, v2, epsilon=1e-6):
+        """
+        Möller–Trumbore intersection algorithm.
+        Returns True if ray intersects triangle (v0, v1, v2)
+        """
+        edge1 = v1 - v0
+        edge2 = v2 - v0
+        h = np.cross(direction, edge2)
+        a = np.dot(edge1, h)
+        if -epsilon < a < epsilon:
+            return False  # Ray is parallel to triangle
+    
+        f = 1.0 / a
+        s = origin - v0
+        u = f * np.dot(s, h)
+        if u < 0.0 or u > 1.0:
+            return False
+    
+        q = np.cross(s, edge1)
+        v = f * np.dot(direction, q)
+        if v < 0.0 or u + v > 1.0:
+            return False
+    
+        t = f * np.dot(edge2, q)
+        return t > epsilon  # Intersection exists
+
+
+    def evaluate_orientation_by_raycast(self, component_faces, other_faces=None, num_samples=20, normal_scale=0.1):
+        """
+        Evaluates which orientation of normals leads to fewer collisions (self and optional other components).
+        If other_faces is None, self-collisions are used for comparison only.
+        """
+    
+        def count_intersections(faces_to_test, flip_normals=False):
+            hits = 0
+            for face in faces_to_test:
+                verts = self.get_face_vertices(face)
+                if len(verts) != 3:
+                    continue  # Skip non-triangle faces
+    
+                v0, v1, v2 = [np.array([v.x, v.y, v.z]) for v in verts]
+                face_normal = face.normal
+                if flip_normals:
+                    face_normal = -face_normal
+    
+                center = (v0 + v1 + v2) / 3
+                ray_origin = center + face_normal * 0.01  # Offset to avoid self-hit
+                ray_dir = face_normal
+    
+                # Test against all triangles (except self-face)
+                for other in all_faces:
+                    if other == face:
+                        continue
+                    ov0, ov1, ov2 = [np.array([v.x, v.y, v.z]) for v in self.get_face_vertices(other)]
+                    if self.ray_intersects_triangle(ray_origin, ray_dir, ov0, ov1, ov2):
+                        hits += 1
+                        break  # Only count 1 hit per ray
+            return hits
+    
+        all_faces = list(component_faces)
+        if other_faces:
+            all_faces += list(other_faces)
+    
+        # Count intersections for original and flipped normals
+        hits_normal = count_intersections(component_faces, flip_normals=False)
+        hits_flipped = count_intersections(component_faces, flip_normals=True)
+    
+        print(f"Component raycast collisions: normal={hits_normal}, flipped={hits_flipped}")
+    
+        return (hits_normal > 0 or hits_flipped > 0), hits_flipped - hits_normal  # True → keep current orientation (outwards), False → flip it
+
+
     def read_obj_file(self, file_path):
         """Read vertices and faces from an OBJ file"""
         self.vertices = []

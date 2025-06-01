@@ -23,10 +23,24 @@ def main():
     else:
         for i, component in enumerate(components):
             print(f"\nProcessing Component {i}")
+            flip = False
             processor.unify_normals_component(component)
             processor.calculate_face_normals()
             processor.calculate_vertex_normals()
-            processor.correct_normals_for_component(component, outwards=True)
+            other_faces = set(face for comp in components if comp is not component for face in comp)
+            #Selfcollisions
+            self_collision, self_diff = processor.evaluate_orientation_by_raycast(component)
+            collision, diff = processor.evaluate_orientation_by_raycast(component, other_faces=other_faces)
+            
+            if (self_collision and self_diff < 0 and diff != 0) or (self_collision and self_diff > 0 and diff == 0):
+                flip = True
+            elif diff < 0:
+                flip = True
+            
+            if flip:
+                print(f"Flipping component {i} based on raycast")
+                for face in component:
+                    processor.flip_face_normal(face)
 
     # Optionally color the mesh after processing
     processor.color_faces_by_orientation()
