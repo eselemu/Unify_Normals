@@ -5,9 +5,10 @@ sys.setrecursionlimit(12000)
 
 def main():
     processor = MeshProcessor()
-    filename = 'unify_normals_01'
-    filename = 's03'
+    filename = 'unify_normals_03'  # Input file name
     input_file = './Input/' + filename + '.obj'
+    
+    # Load and process mesh
     processor.read_obj_file(input_file)
     processor.convert_to_heds()
     processor.calculate_face_normals()
@@ -28,7 +29,8 @@ def main():
             processor.calculate_face_normals()
             processor.calculate_vertex_normals()
             other_faces = set(face for comp in components if comp is not component for face in comp)
-            #Selfcollisions
+            
+            # Check orientation using raycasting
             self_collision, self_diff = processor.evaluate_orientation_by_raycast(component)
             collision, diff = processor.evaluate_orientation_by_raycast(component, other_faces=other_faces)
             
@@ -42,12 +44,9 @@ def main():
                 for face in component:
                     processor.flip_face_normal(face)
 
-    # Optionally color the mesh after processing
-    processor.color_faces_by_orientation()
-
     output_file = './Output/output_' + filename + '.obj'
     processor.write_obj_file(output_file)
-    print(f"Colored mesh saved to {output_file}")
+    print(f"Mesh saved to {output_file}")
 
 if __name__ == "__main__":
     main()
